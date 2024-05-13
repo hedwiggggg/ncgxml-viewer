@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+
+  <script type="text/javascript" src="https://www.unpkg.com/@zip.js/zip.js@2.7.44/dist/zip-full.min.js"></script>
+</head>
+<body>
+  <div class="action-bar">
+    <input id="file-input" accept=".zip" type="file" />
+    <a id="download-link" href="#" class="disabled">Download</a>
+  </div>
+
+  <hr />
+
+  <div id="ncg-doc"></div>
+
+  <script type="text/javascript">
+    const fileInput = document.getElementById("file-input");
+    const downloadLink = document.getElementById("download-link");
+    const ncgDoc = document.getElementById("ncg-doc");
+
+    const parser = new DOMParser();
+    const xsltProcessor = new XSLTProcessor();
+
+    const mimeMap = {
+      ico: "image/x-icon",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      gif: "image/gif",
+      svg: "image/svg+xml",
+      bmp: "image/bmp",
+      tiff: "image/tiff",
+      webp: "image/webp",
+      pdf: "application/pdf",
+      xml: "application/xml",
+    }
+
+    fileInput.addEventListener("change", async (event) => {
+      downloadLink.href = "#";
+      downloadLink.download = undefined;
+      downloadLink.classList.add("disabled");
+
+      const file = event.target.files[0];
+      const zip = new window.zip.ZipReader(new window.zip.BlobReader(file));
+
+      const zipEntries = await zip.getEntries();
+      const xmlEntry = zipEntries.find((entry) => entry.filename.endsWith(".xml"));
+      const xslEntry = zipEntries.find((entry) => entry.filename.endsWith(".xsl"));
+
+      if (!xmlEntry || !xslEntry) {
+        alert("Could not find XML or XSL file");
+        return;
+      }
+
+      const xmlText = await xmlEntry.getData(new window.zip.TextWriter());
+      const xslText = await xslEntry.getData(new window.zip.TextWriter());
+
+      const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+      const xslStylesheet = parser.parseFromString(xslText, "application/xml");
+
+      const selectors = [
+        'CompanyLogoFilename',
+        'LogoFilename',
+        'CompanyLogoSmallFilename',
+        'NCGLogoSmallFilename',
+        'PartImage',
+        'ToolpathImage',
+        'ToolImage'
+      ];
+
+      const imageNodes = xmlDoc.querySelectorAll(selectors.join(', '));
+      const imageNodesArray = Array.from(imageNodes);
+
+      await Promise.all(imageNodesArray.map((node) => {
+        return new Promise(async (resolve) => {
+          const rawPath = node.innerHTML.replace(/[\/\\]/g, '/');	
+          const file = zipEntries.find((entry) => entry.filename.endsWith(rawPath));
+
+          if (!file) {
+            return resolve();
+          }
+
+          const filePath = file.filename;
+          const extension = filePath.split('.').pop();
+          const mimeType = mimeMap[extension] || "application/octet-stream";
+
+          const dataBlob = await file.getData(new window.zip.BlobWriter(mimeType));
+          const reader = new FileReader();
+
+          reader.readAsDataURL(dataBlob);
+          reader.onloadend = function() {
+            node.innerHTML = reader.result;
+            resolve();
+          };
+        })
+      }));
+
+      xsltProcessor.importStylesheet(xslStylesheet);
+
+      const fragment = xsltProcessor.transformToFragment(xmlDoc, document);
+
+      ncgDoc.textContent = "";
+      ncgDoc.appendChild(fragment);
+
+      const html = ncgDoc.innerHTML;
+      const blob = new Blob([html], { type: "text/html" });
+      
+      // download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+
+      const fileNameRaw = file.name;
+      const fileName = fileNameRaw
+        .replace('-xml', '')
+        .replace('.zip', '');
+
+      downloadLink.href = url;
+      downloadLink.download = fileName + ".html";
+      downloadLink.classList.remove("disabled");
+    });
+  </script>
+
+  <style type="text/css">
+    .action-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #file-input {
+      width: 100%;
+    }
+
+    #download-link {
+      cursor: pointer;
+    }
+
+    #download-link.disabled {
+      display: none;
+    }
+  </style>
+</body>
+</html>
